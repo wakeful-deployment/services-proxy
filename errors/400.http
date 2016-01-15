@@ -1,0 +1,6 @@
+HTTP/1.0 400 Bad Request
+Cache-Control: no-cache
+Connection: close
+Content-Type: application/json
+
+{"error":"bad request"}

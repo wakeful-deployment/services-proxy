@@ -1,0 +1,13 @@
+{
+  "platform": "services-proxy",
+  "app": "services-proxy",
+  "owners": [
+    "nathan.herald@microsoft.com",
+    "ryan.levick@microsoft.com"
+  ],
+  "processes": {
+    "services-proxy": {
+      "start": "services-proxy"
+    }
+  }
+}
