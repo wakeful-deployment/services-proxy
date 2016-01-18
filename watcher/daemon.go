@@ -3,6 +3,7 @@ package watcher
 import (
 	"errors"
 	"os/exec"
+	"sync"
 	"time"
 )
 
@@ -19,6 +20,8 @@ var (
 )
 
 type Daemon struct {
+	sync.Mutex
+
 	Path string
 	Argv []string
 
@@ -31,12 +34,43 @@ type Daemon struct {
 }
 
 func (d *Daemon) State() State {
-	// TODO: mutex access here
+	self.Lock()
+	defer self.Unlock()
+
 	return d.state
 }
 
+func (d *Daemon) IsState(checkState) bool {
+	self.Lock()
+	defer self.Unlock()
+
+	return state == checkState
+}
+
+func (d *Daemon) Transition(possibleStates []*State, newState *State) bool {
+	self.Lock()
+	defer self.Unlock()
+
+	success := false
+
+	for state := range possibleStates {
+		if d.state == state {
+			success = true
+			break
+		}
+	}
+
+	if success {
+		state = newState
+	}
+
+	return success
+}
+
 func (d *Daemon) Pid() int {
-	// TODO: mutex access here
+	self.Lock()
+	defer self.Unlock()
+
 	if d.cmd == nil || d.com.Process == nil {
 		return 0
 	}
@@ -45,45 +79,75 @@ func (d *Daemon) Pid() int {
 }
 
 func (d *Daemon) Stop() {
-	d.state = Stopping
-	d.kill()
-	d.wait()
-	d.state = Stopped
-}
-
-// go ...
-func (d *Daemon) Run() {
 	var err error
 
+	d.setState(Stopping) // force state to Stopping
+
+	err = d.kill()
+	if err != nil {
+		// log
+	}
+
+	err = d.wait()
+	if err != nil {
+		// log
+		return // stay in Stopping forever?
+	}
+
+	d.setState(Stopped) // nothing transitions from Stopped, so we are stuck now
+}
+
+func (d *Daemon) Run() {
+	go Loop()
+}
+
+func (d *Daemon) Loop() {
+	initialOrRestarting := []*State{nil, Restarting}
+
+	var err error
+	var state *State
+
 	for {
-		if d.state != nil || d.state != Restarting {
-			return // Running or Stopping or Stopped
+		if !d.Transition(initialOrRestarting, Starting) {
+			return // Not initial or Restarting, so stop here
 		}
-		d.state = Starting
 
 		err = d.startChildProcess()
 		if err != nil {
 			// log err
 		}
 
-		if d.state != Starting {
-			break // state must have been changed
+		if !d.Transition(Starting, Running) {
+			// state must have changed while waiting on the child process to boot, so let's die
+			defer d.kill()
+			break
 		}
-
-		d.state = Running
 
 		err = d.wait()
 		if err != nil {
 			// log err
 		}
 
-		if d.state == Stopping {
+		if !d.Transition(Running, Restarting) {
+			d.shouldShutdown()
+			fmt.Println("breaking out of the loop")
 			break
 		}
 
-		d.state = Restarting
-		time.Sleep(2 * time.Second)
+		time.Sleep(2 * time.Second) // wait a bit before we go back and start another child process
 	}
+}
+
+func (d *Daemon) shouldShutdown() {
+	isStopping := d.IsState(Stopping)
+
+	if isStopping {
+		fmt.Println(fmt.Sprintf("State of %v is Stopping", d))
+	} else {
+		fmt.Println(fmt.Sprintf("Somehow %v got into an unexpected state", d))
+	}
+
+	// TODO: cleanup?
 }
 
 func (d *Daemon) startChildProcess() error {
@@ -105,7 +169,7 @@ func (d *Daemon) startChildProcess() error {
 
 func (d *Daemon) wait() error {
 	if d.cmd == nil {
-		return error.New("not running")
+		return nil
 	}
 
 	err := d.cmd.Wait()
@@ -114,6 +178,10 @@ func (d *Daemon) wait() error {
 }
 
 func (d *Daemon) kill() error {
+	if d.cmd == nil {
+		return nil
+	}
+
 	err := d.cmd.Kill()
 	return err
 }
